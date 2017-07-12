@@ -914,8 +914,8 @@ def getSignals(signalarray, Bo, arDict, ns, multiplexId):
             "COMPU-INTERNAL-TO-PHYS/COMPU-SCALES/COMPU-SCALE",
             arDict,
             ns)
-        initvalue = arGetXchildren(syssignal, "INIT-VALUE/VALUE", arDict, ns)
-        if initvalue is not None and initvalue.__len__() > 1:
+        initvalue = arGetXchildren(isignal, "INIT-VALUE/NUMERICAL-VALUE-SPECIFICATION/VALUE", arDict, ns)
+        if initvalue is not None and initvalue.__len__() >= 1:
             initvalue = initvalue[0]
         else:
             initvalue = None
@@ -1020,6 +1020,7 @@ def getFrame(frameTriggering, arDict, multiplexTranslation, ns):
         pdumapping = arGetChild(
             pdumappings, "PDU-TO-FRAME-MAPPING", arDict, ns)
         pdu = arGetChild(pdumapping, "PDU", arDict, ns)  # SIGNAL-I-PDU
+
 #        newFrame = Frame(idNum, arGetName(frameR, ns), int(dlc.text), None)
         pduFrameMapping[pdu] = arGetName(frameR, ns)
 
@@ -1036,17 +1037,18 @@ def getFrame(frameTriggering, arDict, multiplexTranslation, ns):
             frameTriggering, "I-PDU-TRIGGERING-REFS", arDict, ns)
         ipduTriggering = arGetChild(
             ipduTriggeringRefs, "I-PDU-TRIGGERING", arDict, ns)
-        pdu = arGetChild(ipduTriggering, "I-PDU", arDict, ns)
+        pdu = arGetChild(ipduTriggering, "I-SIGNAL-I-PDU", arDict, ns)
         dlc = arGetChild(pdu, "LENGTH", arDict, ns)
 #        newFrame = Frame(idNum, sn.text, int(int(dlc.text)/8), None)
         newFrame = Frame(sn.text,
                          Id=idNum,
                          dlc=int(dlc.text) / 8)
 
-        if pdu is None:
-            logger.error("ERROR: pdu")
-        else:
-            logger.debug(arGetName(pdu, ns))
+    if pdu is None:
+        logger.error("ERROR: pdu")
+    else:
+        logger.debug("current PDU: %s" % arGetName(pdu, ns))
+
 
     if "MULTIPLEXED-I-PDU" in pdu.tag:
         selectorByteOrder = arGetChild(
@@ -1154,12 +1156,17 @@ def getFrame(frameTriggering, arDict, multiplexTranslation, ns):
 #    pdusigmappings = arGetChild(pdu, "SIGNAL-TO-PDU-MAPPINGS", arDict, ns)
 #    if pdusigmappings is None or pdusigmappings.__len__() == 0:
 #        logger.debug("DEBUG: Frame %s no SIGNAL-TO-PDU-MAPPINGS found" % (newFrame.name))
-    pdusigmapping = arGetChildren(pdu, "I-SIGNAL-TO-I-PDU-MAPPING", arDict, ns)
-    if pdusigmapping is None or pdusigmapping.__len__() == 0:
-        logger.debug(
-            "DEBUG: Frame %s no I-SIGNAL-TO-I-PDU-MAPPING found" %
-            (newFrame.name))
-    getSignals(pdusigmapping, newFrame, arDict, ns, None)
+
+    pdutrigs = arGetChildren(frameTriggering, "PDU-TRIGGERINGS", arDict, ns)
+
+    for pdutrig in pdutrigs:
+        trigrefcond = arGetChild(pdutrig, "PDU-TRIGGERING-REF-CONDITIONAL", arDict, ns)
+        trigs = arGetChild(trigrefcond, "PDU-TRIGGERING", arDict, ns)
+        ipdus = arGetChild(trigs, "I-PDU", arDict, ns)
+        signaltopdumaps = arGetChild(ipdus, "I-SIGNAL-TO-PDU-MAPPINGS", arDict, ns)
+        signaltopdumap = arGetChild(signaltopdumaps, "I-SIGNAL-TO-I-PDU-MAPPING", arDict, ns)
+        getSignals(signaltopdumaps, newFrame, arDict, ns, None)
+
     return newFrame
 
 
@@ -1311,7 +1318,7 @@ def load(file, **options):
     arParseTree(topLevelPackages, arDict, ns)
     logger.debug(" Done\n")
 
-    frames = root.findall('.//' + ns + 'FRAME')
+    frames = root.findall('.//' + ns + 'CAN-FRAME')
     logger.debug("DEBUG %d frames in arxml..." % (frames.__len__()))
     canTriggers = root.findall('.//' + ns + 'CAN-FRAME-TRIGGERING')
     logger.debug(
@@ -1403,7 +1410,8 @@ def load(file, **options):
                 if isignal is None:
                     isignal = arGetChild(sigTrig, 'I-SIGNAL', arDict, ns)
                 if isignal is None:
-                    logger.debug("no isignal for %s" % arGetName(sigTrig, ns))
+		    sigTrig_text = arGetName(sigTrig, ns) %s if sigTrig is not None else "None"
+                    logger.debug("no isignal for %s" % sigTrig_text)
                     continue
                 portRef = arGetChildren(sigTrig, "I-SIGNAL-PORT", arDict, ns)
 
@@ -1435,6 +1443,7 @@ def load(file, **options):
             frame = [0, 0, 0, 0, 0, 0, 0, 0]
             for sig in bo.signals:
                 if sig._initValue != 0:
+		    stbit = sig.getStartbit(bitNumbering=1, startLittle=True)
                     putSignalValueInFrame(
                         sig.getStartbit(
                             bitNumbering=1,
@@ -1445,7 +1454,12 @@ def load(file, **options):
                         frame)
             hexStr = ""
             for i in range(bo.size):
-                hexStr += "%02X" % frame[i]
+		# Seems bo.size is usually way biger than the frame array?
+		try:
+		    hexStr += "%02X" % frame[i]
+		except IndexError:
+		    logger.debug("OORange error")
+		    pass
             bo.addAttribute("GenMsgStartValue", hexStr)
 
         result[busname] = db
